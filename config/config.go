@@ -200,11 +200,11 @@ func parseMemorySize(s string) (int64, error) {
 	multiplier := int64(1)
 	unit := ""
 
-	// Extract unit
+	// Extract unit (find where the number ends)
 	for i := len(s) - 1; i >= 0; i-- {
-		if s[i] < '0' || s[i] > '9' {
-			unit = s[i:]
-			s = s[:i]
+		if s[i] >= '0' && s[i] <= '9' {
+			unit = s[i+1:]
+			s = s[:i+1]
 			break
 		}
 	}
