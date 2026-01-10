@@ -411,7 +411,7 @@ func TestConcurrentDict_ConcurrentMixed(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < operationsPerGoroutine; j++ {
-				key := "key" + strconv.Itoa(j % 100)
+				key := "key" + strconv.Itoa(j%100)
 				dict.Get(key)
 			}
 		}()
