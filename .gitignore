@@ -1,0 +1,30 @@
+# 设计文档
+设计文档.md
+设计文档模板.md
+需求文档.md
+godis设计文档.md
+内存缓存系统设计文档.md
+*.bak
+
+# godis 项目
+godis/
+
+# 测试覆盖率
+coverage.out
+coverage.html
+
+# IDE
+.idea/
+.vscode/
+.claude/
+
+# Go 编译文件
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+gocache
+
+# 测试文件
+*.test
