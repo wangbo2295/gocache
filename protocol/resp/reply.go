@@ -20,6 +20,11 @@ func MakeStatusReply(status string) *StatusReply {
 	return &StatusReply{Status: status}
 }
 
+// MakePongReply creates a PONG reply
+func MakePongReply() *StatusReply {
+	return &StatusReply{Status: "PONG"}
+}
+
 // ToBytes converts status reply to RESP bytes
 func (r *StatusReply) ToBytes() []byte {
 	return []byte("+" + r.Status + "\r\n")
@@ -32,6 +37,11 @@ type ErrReply struct {
 
 // MakeErrReply creates an error reply
 func MakeErrReply(err string) *ErrReply {
+	return &ErrReply{Error: err}
+}
+
+// MakeErrorReply creates an error reply (alias for MakeErrReply)
+func MakeErrorReply(err string) *ErrReply {
 	return &ErrReply{Error: err}
 }
 

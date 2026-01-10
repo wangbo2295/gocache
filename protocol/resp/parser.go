@@ -23,6 +23,21 @@ var (
 	ErrInvalidFormat = errors.New("resp: invalid format")
 )
 
+// Parser represents a RESP parser
+type Parser struct {
+	*bufio.Reader
+}
+
+// MakeParser creates a new RESP parser
+func MakeParser() *Parser {
+	return &Parser{}
+}
+
+// ParseStream reads and parses one RESP command from reader using the parser
+func (p *Parser) ParseStream(reader io.Reader) ([][]byte, error) {
+	return ParseStream(reader)
+}
+
 // ParseStream reads and parses one RESP command from reader
 func ParseStream(reader io.Reader) ([][]byte, error) {
 	// For now, we'll implement a simpler version that reads line by line
