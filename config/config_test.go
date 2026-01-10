@@ -197,3 +197,59 @@ func TestLoadConfigUnknownKey(t *testing.T) {
 		t.Error("Expected error for unknown config key, got nil")
 	}
 }
+
+func TestLoadConfigWithMemorySettings(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "test.conf")
+	configContent := `maxmemory 100kb
+maxmemory-policy allkeys-lru
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	Config = &Properties{}
+	err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
+
+	if Config.MaxMemory != 102400 {
+		t.Errorf("Expected MaxMemory 102400, got %d", Config.MaxMemory)
+	}
+
+	if Config.MaxMemoryPolicy != "allkeys-lru" {
+		t.Errorf("Expected MaxMemoryPolicy 'allkeys-lru', got '%s'", Config.MaxMemoryPolicy)
+	}
+}
+
+func TestParseMemorySize(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected int64
+	}{
+		{"100kb", 102400},
+		{"256mb", 268435456},
+		{"1gb", 1073741824},
+		{"500", 500},
+		{"2kb", 2048},
+		{"1.5gb", 0}, // invalid - decimals not supported
+		{"invalid", 0}, // invalid
+	}
+
+	for _, tt := range tests {
+		result, err := parseMemorySize(tt.input)
+		if tt.expected == 0 {
+			if err == nil {
+				t.Errorf("Expected error for input '%s', got nil", tt.input)
+			}
+		} else {
+			if err != nil {
+				t.Errorf("Unexpected error for input '%s': %v", tt.input, err)
+			}
+			if result != tt.expected {
+				t.Errorf("For input '%s', expected %d, got %d", tt.input, tt.expected, result)
+			}
+		}
+	}
+}
