@@ -27,6 +27,9 @@ type DB struct {
 	// Eviction support
 	evictionPolicy evictionpkg.EvictionPolicy
 	usedMemory    int64 // Current memory usage in bytes
+
+	// Time wheel for TTL management
+	timeWheel *datastruct.TimeWheel
 }
 
 // MakeDB creates a new database instance
@@ -41,6 +44,14 @@ func MakeDB() *DB {
 
 	// Initialize eviction policy based on config
 	db.initEvictionPolicy()
+
+	// Initialize time wheel for TTL management (10ms interval, 1024 buckets)
+	db.timeWheel = datastruct.NewTimeWheel(
+		10*time.Millisecond, // 10ms tick interval
+		1024,                // 1024 buckets (covers ~10 seconds)
+		db.expireFromTimeWheel, // Callback when key expires
+	)
+	db.timeWheel.Start()
 
 	return db
 }
@@ -373,6 +384,9 @@ func (db *DB) Remove(key string) int {
 	db.ttlMap.Remove(key)
 	db.versionMap.Remove(key)
 
+	// Remove from time wheel
+	db.timeWheel.Remove(key)
+
 	// Subtract from memory usage
 	if size > 0 {
 		db.addMemoryUsage(-size)
@@ -398,7 +412,19 @@ func (db *DB) Expire(key string, ttl time.Duration) int {
 	if _, ok := db.data.Get(key); !ok {
 		return 0
 	}
+
+	// Remove from time wheel if it was there
+	_, hasExistingTTL := db.ttlMap.Get(key)
+	if hasExistingTTL {
+		db.timeWheel.Remove(key)
+	}
+
+	// Store exact expiration time in ttlMap for precise TTL queries
 	db.ttlMap.Put(key, time.Now().Add(ttl))
+
+	// Add to time wheel for active expiration
+	db.timeWheel.Add(key, ttl)
+
 	return 1
 }
 
@@ -408,7 +434,54 @@ func (db *DB) Persist(key string) int {
 		return 0
 	}
 	db.ttlMap.Remove(key)
+
+	// Remove from time wheel
+	db.timeWheel.Remove(key)
+
 	return 1
+}
+
+// expireFromTimeWheel is called by the time wheel when a key expires
+// Note: This is called from within the time wheel's tick loop, so we must
+// avoid calling timeWheel.Remove() to prevent deadlock
+func (db *DB) expireFromTimeWheel(key string) {
+	// Check if key still exists and is expired
+	val, ok := db.ttlMap.Get(key)
+	if !ok {
+		return // Key already removed or doesn't have TTL
+	}
+
+	expireTime, ok := val.(time.Time)
+	if !ok {
+		return
+	}
+
+	// Double-check that it's actually expired
+	if time.Now().Before(expireTime) {
+		return // Not expired yet, might have been updated
+	}
+
+	// Remove the key from data structures (but don't call timeWheel.Remove
+	// since we're already in the time wheel's callback)
+	entity, ok := db.getEntityWithoutExpiryCheck(key)
+	var size int64
+	if ok && entity != nil {
+		size = entity.EstimateSize()
+	}
+
+	db.data.Remove(key)
+	db.ttlMap.Remove(key)
+	db.versionMap.Remove(key)
+
+	// Subtract from memory usage
+	if size > 0 {
+		db.addMemoryUsage(-size)
+	}
+
+	// Record deletion in eviction policy
+	if db.evictionPolicy != nil {
+		db.evictionPolicy.RecordDelete(key)
+	}
 }
 
 // TTL returns the remaining TTL in seconds
@@ -2545,4 +2618,11 @@ func runtimeOS() string {
 
 func runtimeArch() string {
 	return "amd64"
+}
+
+// Close stops the time wheel and cleans up resources
+func (db *DB) Close() {
+	if db.timeWheel != nil {
+		db.timeWheel.Stop()
+	}
 }
