@@ -8,6 +8,7 @@ import (
 
 	"github.com/wangbo/gocache/config"
 	"github.com/wangbo/gocache/database"
+	"github.com/wangbo/gocache/persistence/aof"
 )
 
 func TestMakeServer(t *testing.T) {
@@ -282,5 +283,62 @@ func TestHandler_ExecCommand_Empty(t *testing.T) {
 	_, err := handler.ExecCommand([][]byte{})
 	if err == nil {
 		t.Error("Expected error for empty command")
+	}
+}
+
+func TestHandler_WithAOF(t *testing.T) {
+	tmpDir := t.TempDir()
+	filename := tmpDir + "/test.aof"
+
+	db := database.MakeDB()
+	aofHandler, err := aof.MakeAOFHandler(filename, db)
+	if err != nil {
+		t.Fatalf("MakeAOFHandler failed: %v", err)
+	}
+	defer aofHandler.Close()
+
+	// Create handler with AOF
+	handler := MakeHandlerWithAOF(db, aofHandler)
+
+	// Execute some commands
+	result, err := handler.ExecCommand([][]byte{[]byte("SET"), []byte("key1"), []byte("value1")})
+	if err != nil {
+		t.Fatalf("ExecCommand failed: %v", err)
+	}
+	if result == nil {
+		t.Fatal("Result is nil")
+	}
+
+	result, err = handler.ExecCommand([][]byte{[]byte("INCR"), []byte("counter")})
+	if err != nil {
+		t.Fatalf("ExecCommand failed: %v", err)
+	}
+
+	// Close AOF handler
+	aofHandler.Close()
+
+	// Create new DB and AOF handler to load data
+	db2 := database.MakeDB()
+	aofHandler2, err := aof.MakeAOFHandler(filename, db2)
+	if err != nil {
+		t.Fatalf("MakeAOFHandler failed: %v", err)
+	}
+	defer aofHandler2.Close()
+
+	// Verify data was restored
+	dbResult, err := db2.Exec([][]byte{[]byte("GET"), []byte("key1")})
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	if len(dbResult) == 0 || string(dbResult[0]) != "value1" {
+		t.Errorf("Expected 'value1', got %v", dbResult)
+	}
+
+	dbResult, err = db2.Exec([][]byte{[]byte("GET"), []byte("counter")})
+	if err != nil {
+		t.Fatalf("GET failed: %v", err)
+	}
+	if len(dbResult) == 0 || string(dbResult[0]) != "1" {
+		t.Errorf("Expected '1', got %v", dbResult)
 	}
 }

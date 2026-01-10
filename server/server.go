@@ -9,17 +9,24 @@ import (
 
 	"github.com/wangbo/gocache/config"
 	"github.com/wangbo/gocache/database"
+	"github.com/wangbo/gocache/persistence/aof"
 	"github.com/wangbo/gocache/protocol/resp"
 )
 
 // Handler represents a command handler
 type Handler struct {
-	db *database.DB
+	db   *database.DB
+	aof  *aof.AOFHandler
 }
 
 // MakeHandler creates a new handler
 func MakeHandler(db *database.DB) *Handler {
 	return &Handler{db: db}
+}
+
+// MakeHandlerWithAOF creates a new handler with AOF persistence
+func MakeHandlerWithAOF(db *database.DB, aofHandler *aof.AOFHandler) *Handler {
+	return &Handler{db: db, aof: aofHandler}
 }
 
 // ExecCommand executes a command and returns a reply
@@ -42,6 +49,14 @@ func (h *Handler) ExecCommand(cmdLine [][]byte) (resp.Reply, error) {
 	result, err := h.db.Exec(cmdLine)
 	if err != nil {
 		return resp.MakeErrorReply(err.Error()), nil
+	}
+
+	// Write to AOF if enabled and command is write operation
+	if h.aof != nil && isWriteCommand(cmd) {
+		if err := h.aof.AddCommand(cmdLine); err != nil {
+			// Log error but don't fail the command
+			fmt.Printf("AOF write error: %v\n", err)
+		}
 	}
 
 	// Convert result to appropriate reply type
@@ -76,6 +91,24 @@ func (h *Handler) ExecCommand(cmdLine [][]byte) (resp.Reply, error) {
 
 	// For multiple results (MGET, KEYS), return as array
 	return resp.MakeMultiBulkReply(result), nil
+}
+
+// isWriteCommand checks if a command modifies data
+func isWriteCommand(cmd string) bool {
+	writeCmds := map[string]bool{
+		"SET":     true,
+		"MSET":    true,
+		"DEL":     true,
+		"INCR":    true,
+		"INCRBY":  true,
+		"DECR":    true,
+		"DECRBY":  true,
+		"APPEND":  true,
+		"EXPIRE":  true,
+		"PEXPIRE": true,
+		"PERSIST": true,
+	}
+	return writeCmds[cmd]
 }
 
 // isIntegerCommand checks if a command returns an integer result
