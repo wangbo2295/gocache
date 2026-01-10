@@ -48,10 +48,10 @@ appendfsync everysec
 
 ```bash
 # 构建
-go build -o gocache
+go build -o bin/gocache ./cmd/goredis
 
 # 运行
-./gocache
+./bin/gocache
 ```
 
 ### 测试连接

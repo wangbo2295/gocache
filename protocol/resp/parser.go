@@ -81,7 +81,7 @@ func ParseStream(reader io.Reader) ([][]byte, error) {
 		return [][]byte{[]byte(line[1:])}, nil
 	default:
 		// Treat as inline command (simple string without prefix)
-		return [][]byte{[]byte(line)}, nil
+		return splitArgs(line), nil
 	}
 }
 
