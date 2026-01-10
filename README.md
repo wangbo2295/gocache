@@ -48,7 +48,7 @@ appendfsync everysec
 
 ```bash
 # 构建
-go build -o bin/gocache ./cmd/goredis
+go build -o bin/gocache
 
 # 运行
 ./bin/gocache
@@ -60,10 +60,10 @@ go build -o bin/gocache ./cmd/goredis
 
 ```bash
 # 使用 redis-cli
-redis-cli -p 6379
+redis-cli -p 16379
 
 # 或使用 telnet
-telnet 127.0.0.1 6379
+telnet 127.0.0.1 16379
 ```
 
 ### 示例命令

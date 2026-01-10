@@ -37,7 +37,7 @@ type Properties struct {
 var Config = &Properties{
 	// Set default values
 	Bind:          "127.0.0.1",
-	Port:          6379,
+	Port:          16379,
 	Databases:     16,
 	MaxClients:    10000,
 	Timeout:       0,
