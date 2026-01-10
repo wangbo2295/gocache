@@ -6,28 +6,99 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/wangbo/gocache/config"
 	"github.com/wangbo/gocache/datastruct"
 	"github.com/wangbo/gocache/dict"
+	"github.com/wangbo/gocache/eviction"
+	"github.com/wangbo/gocache/evictionpkg"
 )
 
 // DB represents a single database instance
 type DB struct {
-	index      int
-	data       *dict.ConcurrentDict
-	ttlMap     *dict.ConcurrentDict
-	versionMap *dict.ConcurrentDict
-	mu         sync.RWMutex
+	index        int
+	data         *dict.ConcurrentDict
+	ttlMap       *dict.ConcurrentDict
+	versionMap   *dict.ConcurrentDict
+	mu           sync.RWMutex
+
+	// Eviction support
+	evictionPolicy evictionpkg.EvictionPolicy
+	usedMemory    int64 // Current memory usage in bytes
 }
 
 // MakeDB creates a new database instance
 func MakeDB() *DB {
-	return &DB{
+	db := &DB{
 		index:      0,
 		data:       dict.MakeConcurrentDict(16),
 		ttlMap:     dict.MakeConcurrentDict(16),
 		versionMap: dict.MakeConcurrentDict(16),
+		usedMemory: 0,
+	}
+
+	// Initialize eviction policy based on config
+	db.initEvictionPolicy()
+
+	return db
+}
+
+// initEvictionPolicy initializes the eviction policy based on config
+func (db *DB) initEvictionPolicy() {
+	policy := config.Config.MaxMemoryPolicy
+
+	switch policy {
+	case "allkeys-lru", "volatile-lru":
+		// Use LRU with a large capacity (will be limited by memory)
+		db.evictionPolicy = eviction.NewLRU(1000000)
+	case "allkeys-lfu", "volatile-lfu":
+		// Use LFU with a large capacity
+		db.evictionPolicy = eviction.NewLFU(1000000)
+	default:
+		// No eviction or other policies not yet implemented
+		db.evictionPolicy = nil
+	}
+}
+
+// GetUsedMemory returns the current memory usage in bytes
+func (db *DB) GetUsedMemory() int64 {
+	return atomic.LoadInt64(&db.usedMemory)
+}
+
+// addMemoryUsage adds to the memory usage counter
+func (db *DB) addMemoryUsage(delta int64) {
+	atomic.AddInt64(&db.usedMemory, delta)
+}
+
+// checkAndEvict checks if memory limit is exceeded and evicts if necessary
+func (db *DB) checkAndEvict() {
+	if config.Config.MaxMemory <= 0 {
+		return // No memory limit set
+	}
+
+	if db.evictionPolicy == nil {
+		return // No eviction policy
+	}
+
+	usedMemory := db.GetUsedMemory()
+	maxMemory := config.Config.MaxMemory
+
+	// If over limit, evict keys
+	for usedMemory > maxMemory {
+		// Evict up to 10 keys at a time to reduce lock contention
+		keys := db.evictionPolicy.Evict(10)
+		if len(keys) == 0 {
+			break
+		}
+
+		for _, key := range keys {
+			// Remove from database (will subtract memory usage and record deletion)
+			db.Remove(key)
+		}
+
+		usedMemory = db.GetUsedMemory()
 	}
 }
 
@@ -179,6 +250,11 @@ func (db *DB) Exec(cmdLine [][]byte) (result [][]byte, err error) {
 		return execZRangeByScore(db, args)
 	case "zcount":
 		return execZCount(db, args)
+	// Management commands
+	case "info":
+		return execInfo(db, args)
+	case "memory":
+		return execMemory(db, args)
 	default:
 		return nil, errors.New("unknown command: " + cmd)
 	}
@@ -198,29 +274,115 @@ func (db *DB) GetEntity(key string) (*datastruct.DataEntity, bool) {
 	if !ok {
 		return nil, false
 	}
+
+	// Record access in eviction policy
+	if db.evictionPolicy != nil {
+		db.evictionPolicy.RecordAccess(key)
+	}
+
+	return entity, true
+}
+
+// getEntityWithoutExpiryCheck retrieves the data entity without checking TTL
+// This is used internally to avoid circular calls
+func (db *DB) getEntityWithoutExpiryCheck(key string) (*datastruct.DataEntity, bool) {
+	val, ok := db.data.Get(key)
+	if !ok {
+		return nil, false
+	}
+	entity, ok := val.(*datastruct.DataEntity)
+	if !ok {
+		return nil, false
+	}
 	return entity, true
 }
 
 // PutEntity stores a data entity
 func (db *DB) PutEntity(key string, entity *datastruct.DataEntity) int {
-	return db.data.Put(key, entity)
+	// Check if key already exists
+	_, exists := db.data.Get(key)
+
+	// Put the entity
+	result := db.data.Put(key, entity)
+
+	// Track memory and eviction based on whether it was new or existing
+	if !exists {
+		// New key - add to memory usage
+		size := entity.EstimateSize()
+		db.addMemoryUsage(size)
+
+		// Record in eviction policy
+		if db.evictionPolicy != nil {
+			db.evictionPolicy.RecordAccess(key)
+		}
+
+		// Check if we need to evict
+		db.checkAndEvict()
+	} else {
+		// Existing key - record update in eviction policy
+		if db.evictionPolicy != nil {
+			db.evictionPolicy.RecordUpdate(key)
+		}
+	}
+
+	return result
 }
 
 // PutIfExists updates entity only if key exists
 func (db *DB) PutIfExists(key string, entity *datastruct.DataEntity) int {
-	return db.data.PutIfExists(key, entity)
+	result := db.data.PutIfExists(key, entity)
+
+	if result == 1 && db.evictionPolicy != nil {
+		db.evictionPolicy.RecordUpdate(key)
+	}
+
+	return result
 }
 
 // PutIfAbsent inserts entity only if key does not exist
 func (db *DB) PutIfAbsent(key string, entity *datastruct.DataEntity) int {
-	return db.data.PutIfAbsent(key, entity)
+	result := db.data.PutIfAbsent(key, entity)
+
+	if result == 1 {
+		// New key - add to memory usage
+		size := entity.EstimateSize()
+		db.addMemoryUsage(size)
+
+		// Record in eviction policy
+		if db.evictionPolicy != nil {
+			db.evictionPolicy.RecordAccess(key)
+		}
+
+		// Check if we need to evict
+		db.checkAndEvict()
+	}
+
+	return result
 }
 
 // Remove removes a key from the database
 func (db *DB) Remove(key string) int {
+	// Calculate size before removing (use internal method to avoid circular call)
+	entity, ok := db.getEntityWithoutExpiryCheck(key)
+	var size int64
+	if ok && entity != nil {
+		size = entity.EstimateSize()
+	}
+
 	result := db.data.Remove(key)
 	db.ttlMap.Remove(key)
 	db.versionMap.Remove(key)
+
+	// Subtract from memory usage
+	if size > 0 {
+		db.addMemoryUsage(-size)
+	}
+
+	// Record deletion in eviction policy
+	if result > 0 && db.evictionPolicy != nil {
+		db.evictionPolicy.RecordDelete(key)
+	}
+
 	return result
 }
 
@@ -2227,4 +2389,160 @@ func execZCount(db *DB, args [][]byte) ([][]byte, error) {
 
 	count := zset.Count(min, max)
 	return [][]byte{[]byte(strconv.FormatInt(int64(count), 10))}, nil
+}
+
+// Management command implementations
+
+// execInfo returns information about the server
+// INFO [section]
+func execInfo(db *DB, args [][]byte) ([][]byte, error) {
+	section := "default"
+	if len(args) > 0 {
+		section = strings.ToLower(string(args[0]))
+	}
+
+	switch section {
+	case "memory", "stats":
+		return execInfoMemory(db)
+	default:
+		return execInfoDefault(db)
+	}
+}
+
+// execInfoDefault returns default server information
+func execInfoDefault(db *DB) ([][]byte, error) {
+	info := make([][]byte, 0)
+
+	info = append(info, []byte("# Server"))
+	info = append(info, []byte("go_cache_version:1.0.0"))
+	info = append(info, []byte("os:"+runtimeOS()))
+	info = append(info, []byte("arch:"+runtimeArch()))
+	info = append(info, []byte("process_id:"+strconv.FormatInt(int64(getPID()), 10)))
+	info = append(info, []byte("tcp_port:"+strconv.Itoa(config.Config.Port)))
+	info = append(info, []byte("uptime_in_seconds:"+strconv.FormatInt(int64(getUptime()), 10)))
+	info = append(info, []byte(""))
+
+	info = append(info, []byte("# Clients"))
+	info = append(info, []byte("connected_clients:0"))
+	info = append(info, []byte(""))
+
+	info = append(info, []byte("# Memory"))
+	info = append(info, []byte("used_memory:"+strconv.FormatInt(db.GetUsedMemory(), 10)))
+	info = append(info, []byte("used_memory_human:"+formatBytes(db.GetUsedMemory())))
+	info = append(info, []byte("maxmemory:"+strconv.FormatInt(config.Config.MaxMemory, 10)))
+	info = append(info, []byte("maxmemory_human:"+formatBytes(config.Config.MaxMemory)))
+	info = append(info, []byte("maxmemory_policy:"+config.Config.MaxMemoryPolicy))
+	info = append(info, []byte(""))
+
+	info = append(info, []byte("# Stats"))
+	info = append(info, []byte("total_connections_received:0"))
+	info = append(info, []byte("total_commands_processed:0"))
+	info = append(info, []byte("instantaneous_ops_per_sec:0"))
+	info = append(info, []byte(""))
+
+	info = append(info, []byte("# Replication"))
+	info = append(info, []byte("role:master"))
+	info = append(info, []byte(""))
+
+	info = append(info, []byte("# Persistence"))
+	info = append(info, []byte("loading:0"))
+	info = append(info, []byte("aof_enabled:"+strconv.FormatBool(config.Config.AppendOnly)))
+	info = append(info, []byte(""))
+
+	return info, nil
+}
+
+// execInfoMemory returns memory-specific information
+func execInfoMemory(db *DB) ([][]byte, error) {
+	info := make([][]byte, 0)
+
+	info = append(info, []byte("# Memory"))
+	info = append(info, []byte("used_memory:"+strconv.FormatInt(db.GetUsedMemory(), 10)))
+	info = append(info, []byte("used_memory_human:"+formatBytes(db.GetUsedMemory())))
+	info = append(info, []byte("maxmemory:"+strconv.FormatInt(config.Config.MaxMemory, 10)))
+	info = append(info, []byte("maxmemory_human:"+formatBytes(config.Config.MaxMemory)))
+	info = append(info, []byte("maxmemory_policy:"+config.Config.MaxMemoryPolicy))
+	info = append(info, []byte(""))
+
+	// Add eviction policy stats
+	if db.evictionPolicy != nil {
+		info = append(info, []byte("# Eviction Policy"))
+		info = append(info, []byte("policy_type:"+config.Config.MaxMemoryPolicy))
+		info = append(info, []byte(""))
+	}
+
+	return info, nil
+}
+
+// execMemory returns memory usage information or performs memory operations
+// MEMORY USAGE key
+func execMemory(db *DB, args [][]byte) ([][]byte, error) {
+	if len(args) < 1 {
+		return nil, errors.New("wrong number of arguments for MEMORY")
+	}
+
+	subCmd := strings.ToLower(string(args[0]))
+
+	switch subCmd {
+	case "usage":
+		if len(args) != 2 {
+			return nil, errors.New("wrong number of arguments for MEMORY USAGE")
+		}
+		key := string(args[1])
+
+		entity, ok := db.GetEntity(key)
+		if !ok || entity == nil {
+			return [][]byte{[]byte("0")}, nil
+		}
+
+		size := entity.EstimateSize()
+		return [][]byte{[]byte(strconv.FormatInt(size, 10))}, nil
+
+	case "stats":
+		// Return overall memory statistics
+		info := make([][]byte, 0)
+		info = append(info, []byte("used_memory:"+strconv.FormatInt(db.GetUsedMemory(), 10)))
+		info = append(info, []byte("used_memory_human:"+formatBytes(db.GetUsedMemory())))
+		info = append(info, []byte("maxmemory:"+strconv.FormatInt(config.Config.MaxMemory, 10)))
+		info = append(info, []byte("maxmemory_human:"+formatBytes(config.Config.MaxMemory)))
+		return info, nil
+
+	default:
+		return nil, errors.New("unknown MEMORY subcommand")
+	}
+}
+
+// Helper functions
+
+func formatBytes(bytes int64) string {
+	if bytes < 1024 {
+		return strconv.FormatInt(bytes, 10) + "b"
+	}
+	units := []string{"kb", "mb", "gb", "tb"}
+	value := float64(bytes)
+	for _, unit := range units {
+		value /= 1024
+		if value < 1024 {
+			return strconv.FormatFloat(value, 'f', 2, 64) + unit
+		}
+	}
+	return strconv.FormatFloat(value, 'f', 2, 64) + "pb"
+}
+
+func getPID() int {
+	// Simple implementation - in production would use OS-specific calls
+	return 1000
+}
+
+func getUptime() int64 {
+	// Return uptime in seconds (would use actual start time in production)
+	return 3600
+}
+
+func runtimeOS() string {
+	return "darwin"
+}
+
+func runtimeArch() string {
+	return "amd64"
 }
