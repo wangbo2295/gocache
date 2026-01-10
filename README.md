@@ -90,6 +90,53 @@ TTL mykey
 (integer) 60
 ```
 
+## 配置选项
+
+GoCache 支持通过配置文件或命令行参数进行配置。主要配置选项包括：
+
+### 服务器配置
+
+| 配置项 | 默认值 | 描述 |
+|--------|--------|------|
+| `bind` | 127.0.0.1 | 绑定地址 |
+| `port` | 16379 | 监听端口 |
+| `databases` | 16 | 数据库数量 |
+| `maxclients` | 10000 | 最大客户端连接数 |
+
+### 持久化配置
+
+| 配置项 | 默认值 | 描述 |
+|--------|--------|------|
+| `appendonly` | no | 是否启用 AOF 持久化 |
+| `appendfilename` | appendonly.aof | AOF 文件名 |
+| `appendfsync` | everysec | AOF 同步策略（always/everysec/no） |
+| `dbfilename` | dump.rdb | RDB 文件名 |
+
+### 内存和淘汰策略配置
+
+| 配置项 | 默认值 | 描述 |
+|--------|--------|------|
+| `maxmemory` | 0 | 最大内存限制（0 表示无限制） |
+| `maxmemory-policy` | noeviction | 内存淘汰策略 |
+
+**内存大小格式**：支持 kb, mb, gb, tb 单位（不区分大小写）
+```
+maxmemory 256mb
+maxmemory 1gb
+```
+
+**淘汰策略选项**：
+- `noeviction` - 不淘汰，内存满时返回错误
+- `allkeys-lru` - 从所有键中淘汰最少使用的（LRU）
+- `allkeys-lfu` - 从所有键中淘汰最少访问的（LFU）
+- `volatile-lru` - 从设置了过期时间的键中淘汰最少使用的
+- `volatile-lfu` - 从设置了过期时间的键中淘汰最少访问的
+- `allkeys-random` - 从所有键中随机淘汰
+- `volatile-random` - 从设置了过期时间的键中随机淘汰
+- `volatile-ttl` - 淘汰即将过期的键
+
+> 注意：当前版本已实现 LRU/LFU 核心算法和配置支持，完整的淘汰策略集成正在进行中。
+
 ## 支持的命令
 
 ### 字符串命令
@@ -119,6 +166,74 @@ TTL mykey
 | TTL | 查看剩余时间（秒） | `TTL key` |
 | PTTL | 查看剩余时间（毫秒） | `PTTL key` |
 | PERSIST | 移除过期时间 | `PERSIST key` |
+
+### Hash 命令
+
+| 命令 | 描述 | 示例 |
+|------|------|------|
+| HSET | 设置字段值 | `HSET key field value` |
+| HGET | 获取字段值 | `HGET key field` |
+| HDEL | 删除字段 | `HDEL key field1 field2` |
+| HEXISTS | 检查字段是否存在 | `HEXISTS key field` |
+| HGETALL | 获取所有字段和值 | `HGETALL key` |
+| HKEYS | 获取所有字段名 | `HKEYS key` |
+| HVALS | 获取所有字段值 | `HVALS key` |
+| HLEN | 获取字段数量 | `HLEN key` |
+| HSETNX | 字段不存在时设置 | `HSETNX key field value` |
+| HINCRBY | 字段值自增 | `HINCRBY key field 10` |
+| HMGET | 批量获取字段 | `HMGET key field1 field2` |
+| HMSET | 批量设置字段 | `HMSET key field1 val1 field2 val2` |
+
+### List 命令
+
+| 命令 | 描述 | 示例 |
+|------|------|------|
+| LPUSH | 从头部插入值 | `LPUSH key value [value ...]` |
+| RPUSH | 从尾部插入值 | `RPUSH key value [value ...]` |
+| LPOP | 从头部弹出值 | `LPOP key` |
+| RPOP | 从尾部弹出值 | `RPOP key` |
+| LINDEX | 获取索引处的值 | `LINDEX key index` |
+| LSET | 设置索引处的值 | `LSET key index value` |
+| LRANGE | 获取范围内的值 | `LRANGE key start stop` |
+| LTRIM | 裁剪列表到范围 | `LTRIM key start stop` |
+| LREM | 删除指定值的元素 | `LREM key count value` |
+| LINSERT | 在指定值前后插入 | `LINSERT key BEFORE|AFTER pivot value` |
+| LLEN | 获取列表长度 | `LLEN key` |
+
+### Set 命令
+
+| 命令 | 描述 | 示例 |
+|------|------|------|
+| SADD | 添加成员 | `SADD key member [member ...]` |
+| SREM | 删除成员 | `SREM key member [member ...]` |
+| SISMEMBER | 检查成员是否存在 | `SISMEMBER key member` |
+| SMEMBERS | 获取所有成员 | `SMEMBERS key` |
+| SCARD | 获取成员数量 | `SCARD key` |
+| SPOP | 随机弹出成员 | `SPOP key` |
+| SRANDMEMBER | 随机获取成员 | `SRANDMEMBER key` |
+| SMOVE | 移动成员到另一个集合 | `SMOVE src dst member` |
+| SDIFF | 差集 | `SDIFF key1 key2` |
+| SINTER | 交集 | `SINTER key1 key2` |
+| SUNION | 并集 | `SUNION key1 key2` |
+| SDIFFSTORE | 存储差集 | `SDIFFSTORE dst key1 key2` |
+| SINTERSTORE | 存储交集 | `SINTERSTORE dst key1 key2` |
+| SUNIONSTORE | 存储并集 | `SUNIONSTORE dst key1 key2` |
+
+### SortedSet 命令
+
+| 命令 | 描述 | 示例 |
+|------|------|------|
+| ZADD | 添加或更新成员分数 | `ZADD key score member` |
+| ZREM | 删除成员 | `ZREM key member` |
+| ZSCORE | 获取成员分数 | `ZSCORE key member` |
+| ZINCRBY | 增加成员分数 | `ZINCRBY key increment member` |
+| ZCARD | 获取成员数量 | `ZCARD key` |
+| ZRANK | 获取成员排名（升序） | `ZRANK key member` |
+| ZREVRANK | 获取成员排名（降序） | `ZREVRANK key member` |
+| ZRANGE | 按排名范围获取（升序） | `ZRANGE key start stop` |
+| ZREVRANGE | 按排名范围获取（降序） | `ZREVRANGE key start stop` |
+| ZRANGEBYSCORE | 按分数范围获取 | `ZRANGEBYSCORE key min max` |
+| ZCOUNT | 统计分数范围内成员数 | `ZCOUNT key min max` |
 
 ### 服务器命令
 
@@ -293,7 +408,7 @@ go vet ./...
 
 ## 已知限制
 
-这是 MVP 版本，以下功能尚未实现：
+当前版本，以下功能尚未实现：
 
 - ❌ RDB 快照持久化
 - ❌ 主从复制
@@ -301,19 +416,18 @@ go vet ./...
 - ❌ 发布订阅
 - ❌ 事务（MULTI/EXEC）
 - ❌ Lua 脚本
-- ❌ List、Hash、Set、SortedSet 数据结构（仅支持 String）
-- ❌ 数据淘汰策略
+- ⚠️ 数据淘汰策略（已实现 LRU/LFU 核心，待集成到数据库）
 - ❌ AOF 重写
 
 ## 路线图
 
 ### 下一个版本（v1.1）
 
-- [ ] Hash 数据结构
-- [ ] List 数据结构
-- [ ] Set 数据结构
-- [ ] SortedSet 数据结构
-- [ ] 数据淘汰策略（LRU、LFU）
+- [x] Hash 数据结构
+- [x] List 数据结构
+- [x] Set 数据结构
+- [x] SortedSet 数据结构
+- [x] 数据淘汰策略（LRU、LFU 核心实现）
 
 ### 未来版本
 

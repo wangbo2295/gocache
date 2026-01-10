@@ -107,9 +107,10 @@ func (s *String) GetRange(start, end int) []byte {
 
 // Errors
 var (
-	ErrInvalidInteger = newError("ERR value is not an integer or out of range")
-	ErrInvalidFloat  = newError("ERR value is not a valid float")
-	ErrOverflow      = newError("ERR increment or decrement would overflow")
+	ErrInvalidInteger  = newError("ERR value is not an integer or out of range")
+	ErrInvalidFloat   = newError("ERR value is not a valid float")
+	ErrOverflow       = newError("ERR increment or decrement would overflow")
+	ErrIndexOutOfRange = newError("ERR index out of range")
 )
 
 type errorString string

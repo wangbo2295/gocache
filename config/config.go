@@ -31,23 +31,29 @@ type Properties struct {
 
 	// Security
 	RequirePass string
+
+	// Memory and eviction configuration
+	MaxMemory        int64  // Maximum memory in bytes (0 means no limit)
+	MaxMemoryPolicy  string // Eviction policy: noeviction, allkeys-lru, allkeys-lfu, etc.
 }
 
 // Global configuration instance
 var Config = &Properties{
 	// Set default values
-	Bind:          "127.0.0.1",
-	Port:          16379,
-	Databases:     16,
-	MaxClients:    10000,
-	Timeout:       0,
-	AppendOnly:    false,
-	AppendFilename: "appendonly.aof",
-	AppendFsync:   "everysec",
-	DBFilename:    "dump.rdb",
-	LogLevel:      "info",
-	LogFile:       "",
-	RequirePass:   "",
+	Bind:            "127.0.0.1",
+	Port:            16379,
+	Databases:       16,
+	MaxClients:      10000,
+	Timeout:         0,
+	AppendOnly:      false,
+	AppendFilename:  "appendonly.aof",
+	AppendFsync:     "everysec",
+	DBFilename:      "dump.rdb",
+	LogLevel:        "info",
+	LogFile:         "",
+	RequirePass:     "",
+	MaxMemory:       0,                  // 0 means no limit
+	MaxMemoryPolicy: "noeviction",       // Default: no eviction
 }
 
 // Load loads configuration from file
@@ -157,9 +163,73 @@ func setConfig(key, value string) error {
 		Config.LogFile = value
 	case "requirepass":
 		Config.RequirePass = value
+	case "maxmemory":
+		maxMemory, err := parseMemorySize(value)
+		if err != nil {
+			return fmt.Errorf("invalid maxmemory: %s", value)
+		}
+		Config.MaxMemory = maxMemory
+	case "maxmemory-policy":
+		policy := strings.ToLower(value)
+		validPolicies := map[string]bool{
+			"noeviction":       true,
+			"allkeys-lru":      true,
+			"allkeys-lfu":      true,
+			"volatile-lru":     true,
+			"volatile-lfu":     true,
+			"allkeys-random":   true,
+			"volatile-random":  true,
+			"volatile-ttl":     true,
+		}
+		if !validPolicies[policy] {
+			return fmt.Errorf("invalid maxmemory-policy: %s", value)
+		}
+		Config.MaxMemoryPolicy = policy
 	default:
 		// Ignore unknown config keys for now
 		return fmt.Errorf("unknown config key: %s", key)
 	}
 	return nil
+}
+
+// parseMemorySize parses memory size string (e.g., "1gb", "256mb")
+func parseMemorySize(s string) (int64, error) {
+	s = strings.ToLower(strings.TrimSpace(s))
+
+	// Default to bytes if no unit
+	multiplier := int64(1)
+	unit := ""
+
+	// Extract unit
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] < '0' || s[i] > '9' {
+			unit = s[i:]
+			s = s[:i]
+			break
+		}
+	}
+
+	// Parse number
+	value, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+
+	// Apply multiplier
+	switch unit {
+	case "kb", "k":
+		multiplier = 1024
+	case "mb", "m":
+		multiplier = 1024 * 1024
+	case "gb", "g":
+		multiplier = 1024 * 1024 * 1024
+	case "tb", "t":
+		multiplier = 1024 * 1024 * 1024 * 1024
+	case "", "b":
+		multiplier = 1
+	default:
+		return 0, fmt.Errorf("unknown unit: %s", unit)
+	}
+
+	return value * multiplier, nil
 }
