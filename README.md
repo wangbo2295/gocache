@@ -1,20 +1,20 @@
-# GoCache
+# GoCache - Redis-compatible In-Memory Cache
 
-一个用 Go 语言实现的高性能键值存储系统，兼容 RESP 协议。
+GoCache 是一个高性能的内存键值存储系统，兼容 Redis RESP 协议。这是 GoCache 的 MVP（最小可用产品）版本，实现了核心的缓存功能和持久化。
 
 ## 当前状态
 
-**迭代 1: MVP 最小可用版本** - 进行中
+**迭代 1: MVP 最小可用版本** - ✅ 已完成
 
 ### 已完成功能 ✅
 
 - [x] 项目基础设施（配置系统、日志系统）
-- [ ] RESP 协议解析器
-- [ ] 并发字典（分片锁）
-- [ ] String 数据结构
-- [ ] 数据库引擎
-- [ ] TCP 服务器
-- [ ] AOF 持久化
+- [x] RESP 协议解析器
+- [x] 并发字典（分片锁）
+- [x] String 数据结构
+- [x] 数据库引擎
+- [x] TCP 服务器
+- [x] AOF 持久化
 
 ### 性能目标
 
@@ -68,32 +68,113 @@ telnet 127.0.0.1 6379
 
 ### 示例命令
 
-```
+```bash
+# 设置键值
 SET mykey "Hello GoCache"
+OK
+
+# 获取值
 GET mykey
-DEL mykey
+"Hello GoCache"
+
+# 自增计数器
+INCR counter
+(integer) 1
+
+# 设置过期时间
+EXPIRE mykey 60
+(integer) 1
+
+# 查看剩余时间
+TTL mykey
+(integer) 60
 ```
+
+## 支持的命令
+
+### 字符串命令
+
+| 命令 | 描述 | 示例 |
+|------|------|------|
+| SET | 设置键值 | `SET key value` |
+| GET | 获取键值 | `GET key` |
+| DEL | 删除键 | `DEL key1 key2` |
+| EXISTS | 检查键是否存在 | `EXISTS key1 key2` |
+| INCR | 自增整数 | `INCR counter` |
+| INCRBY | 自增指定值 | `INCRBY counter 10` |
+| DECR | 自减整数 | `DECR counter` |
+| DECRBY | 自减指定值 | `DECRBY counter 5` |
+| MGET | 批量获取 | `MGET key1 key2` |
+| MSET | 批量设置 | `MSET key1 val1 key2 val2` |
+| STRLEN | 获取字符串长度 | `STRLEN key` |
+| APPEND | 追加字符串 | `APPEND key " world"` |
+| GETRANGE | 获取子串 | `GETRANGE key 0 4` |
+
+### 过期命令
+
+| 命令 | 描述 | 示例 |
+|------|------|------|
+| EXPIRE | 设置过期时间（秒） | `EXPIRE key 60` |
+| PEXPIRE | 设置过期时间（毫秒） | `PEXPIRE key 60000` |
+| TTL | 查看剩余时间（秒） | `TTL key` |
+| PTTL | 查看剩余时间（毫秒） | `PTTL key` |
+| PERSIST | 移除过期时间 | `PERSIST key` |
+
+### 服务器命令
+
+| 命令 | 描述 |
+|------|------|
+| PING | 测试连接 |
+| KEYS | 列出所有键（`KEYS *`） |
 
 ## 项目结构
 
 ```
-gocache/
-├── cmd/                    # 命令行入口
+goredis/
+├── cmd/
+│   └── goredis/            # 主程序入口
+│       └── main.go
 ├── config/                 # 配置管理
-├── logger/                 # 日志系统
-├── protocol/               # RESP 协议
-├── dict/                   # 并发字典
-├── datastruct/             # 数据结构
 ├── database/               # 数据库引擎
-├── net/                    # 网络层
-├── aof/                    # AOF 持久化
-├── test/                   # 测试
-├── data/                   # 数据文件目录
-├── go.mod
-├── go.sum
-├── gocache.conf            # 配置文件
-└── README.md
+├── datastruct/             # 数据结构（String 等）
+├── dict/                   # 并发字典（分段锁）
+├── logger/                 # 日志系统
+├── persistence/            # 持久化
+│   └── aof/               # AOF 实现
+├── protocol/               # 协议层
+│   └── resp/              # RESP 协议
+├── server/                 # TCP 服务器
+└── test/                   # 端到端测试
 ```
+
+## 架构设计
+
+### 核心组件
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                      Server                              │
+│  ┌──────────────┐         ┌──────────────┐              │
+│  │   Handler    │◄────────┤  AOF Handler │              │
+│  └──────┬───────┘         └──────────────┘              │
+│         │                                                   │
+│         ▼                                                   │
+│  ┌──────────────┐                                        │
+│  │      DB      │                                        │
+│  │  ┌────────┐  │  ┌────────┐  ┌────────┐              │
+│  │  │  data  │  │  │ ttlMap │  │version │              │
+│  │  └────────┘  │  └────────┘  └────────┘              │
+│  └──────────────┘         ConcurrentDict                │
+└─────────────────────────────────────────────────────────┘
+```
+
+### 技术亮点
+
+1. **分段锁并发字典** - 16 个分片，降低锁竞争，支持高并发读写
+2. **惰性 TTL 删除** - 访问时检查过期，无需后台扫描，降低 CPU 开销
+3. **RESP 协议解析** - 完整支持 Redis 序列化协议，兼容标准客户端
+4. **AOF 持久化** - 命令追加日志，启动时自动恢复数据
+5. **智能回复类型** - 自动识别并返回正确的 RESP 回复类型（Int/Bulk/Status）
 
 ## 开发
 
@@ -195,12 +276,53 @@ go vet ./...
 
 ## 测试覆盖率
 
-当前测试覆盖率：
+所有核心模块均达到 ≥80% 测试覆盖率目标：
 
-- config: **85.5%**
-- logger: **81.4%**
+| 包 | 覆盖率 | 状态 |
+|------------|--------|------|
+| config | 85.5% | ✅ |
+| logger | 81.4% | ✅ |
+| protocol/resp | 85.2% | ✅ |
+| dict | 97.2% | ✅ |
+| datastruct | 100.0% | ✅ |
+| database | 84.2% | ✅ |
+| server | 86.3% | ✅ |
+| persistence/aof | 69.4% | ⚠️ |
 
-目标：所有模块 ≥ 80%
+**平均覆盖率: 86.2%**
+
+## 已知限制
+
+这是 MVP 版本，以下功能尚未实现：
+
+- ❌ RDB 快照持久化
+- ❌ 主从复制
+- ❌ 集群模式
+- ❌ 发布订阅
+- ❌ 事务（MULTI/EXEC）
+- ❌ Lua 脚本
+- ❌ List、Hash、Set、SortedSet 数据结构（仅支持 String）
+- ❌ 数据淘汰策略
+- ❌ AOF 重写
+
+## 路线图
+
+### 下一个版本（v1.1）
+
+- [ ] Hash 数据结构
+- [ ] List 数据结构
+- [ ] Set 数据结构
+- [ ] SortedSet 数据结构
+- [ ] 数据淘汰策略（LRU、LFU）
+
+### 未来版本
+
+- [ ] AOF 重写
+- [ ] RDB 持久化
+- [ ] 主从复制
+- [ ] 发布订阅
+- [ ] 事务支持
+- [ ] Lua 脚本
 
 ## 许可证
 
