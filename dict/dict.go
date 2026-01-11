@@ -1,7 +1,6 @@
 package dict
 
 import (
-	"hash/fnv"
 	"sync"
 	"sync/atomic"
 )
@@ -72,13 +71,25 @@ func leadingZeros(x uint32) uint32 {
 	return n
 }
 
-// spread calculates the shard index for a given key using FNV hash
+// spread calculates the shard index for a given key using optimized FNV-1a hash
+// This inline implementation avoids memory allocation from hash/fnv package
 func (d *ConcurrentDict) spread(key string) uint32 {
-	hash32 := fnv.New32()
-	hash32.Write([]byte(key))
-	hash := hash32.Sum32()
-	// Use higher bits for better distribution
-	return (hash >> 16) % uint32(d.shardCount)
+	// FNV-1a 32-bit hash algorithm
+	// This is a zero-allocation implementation using bitwise operations
+	const (
+		offset32 = 2166136261
+		prime32  = 16777619
+	)
+
+	hash := uint32(offset32)
+	for i := 0; i < len(key); i++ {
+		hash ^= uint32(key[i])
+		hash *= prime32
+	}
+
+	// Use higher bits for better distribution and modulo for shard selection
+	// Since shardCount is always power of 2, we can use bitwise AND for faster computation
+	return (hash >> 16) & (uint32(d.shardCount) - 1)
 }
 
 // Get retrieves the value for a given key
@@ -233,4 +244,42 @@ func (d *ConcurrentDict) Clear() {
 		shard.mutex.Unlock()
 	}
 	atomic.StoreInt32(&d.count, 0)
+}
+
+// AtomicUpdate performs a read-modify-write operation atomically on a key
+// The updater function receives the current value (or nil if key doesn't exist)
+// and returns the new value. The shard lock is held during the entire operation.
+// Returns the previous value (or nil if key didn't exist) and true if key existed.
+func (d *ConcurrentDict) AtomicUpdate(key string, updater func(interface{}) interface{}) (interface{}, bool) {
+	index := d.spread(key)
+	shard := d.table[index]
+	shard.mutex.Lock()
+	defer shard.mutex.Unlock()
+
+	val, existed := shard.m[key]
+	// Call updater with current value to get new value
+	newVal := updater(val)
+	shard.m[key] = newVal
+
+	if !existed {
+		atomic.AddInt32(&d.count, 1)
+	}
+	return val, existed
+}
+
+// AtomicGetAndUpdate atomically gets the current value and updates it with a new value
+// Returns the previous value (or nil if key didn't exist) and whether it existed.
+func (d *ConcurrentDict) AtomicGetAndUpdate(key string, newVal interface{}) (interface{}, bool) {
+	index := d.spread(key)
+	shard := d.table[index]
+	shard.mutex.Lock()
+	defer shard.mutex.Unlock()
+
+	val, existed := shard.m[key]
+	shard.m[key] = newVal
+
+	if !existed {
+		atomic.AddInt32(&d.count, 1)
+	}
+	return val, existed
 }

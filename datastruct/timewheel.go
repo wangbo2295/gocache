@@ -103,14 +103,19 @@ func (tw *TimeWheel) Start() {
 	tw.stopChan = make(chan struct{})
 	tw.running.Store(1)
 
+	ticker := tw.ticker
+	stopChan := tw.stopChan
+
 	tw.wg.Add(1)
 	go func() {
 		defer tw.wg.Done()
-		for tw.running.Load() == 1 {
+		for {
 			select {
-			case <-tw.ticker.C:
-				tw.tick()
-			case <-tw.stopChan:
+			case <-ticker.C:
+				if tw.running.Load() == 1 {
+					tw.tick()
+				}
+			case <-stopChan:
 				return
 			}
 		}
@@ -119,7 +124,6 @@ func (tw *TimeWheel) Start() {
 
 // Stop stops the time wheel
 func (tw *TimeWheel) Stop() {
-	// First, signal stop
 	tw.Lock()
 	if tw.running.Load() == 0 {
 		tw.Unlock()
@@ -130,9 +134,15 @@ func (tw *TimeWheel) Stop() {
 	if tw.ticker != nil {
 		tw.ticker.Stop()
 	}
-	close(tw.stopChan)
+	stopChan := tw.stopChan
+	tw.stopChan = nil
 	tw.ticker = nil
 	tw.Unlock()
+
+	// Close stopChan without holding the lock to avoid race
+	if stopChan != nil {
+		close(stopChan)
+	}
 
 	// Then wait for goroutine to finish (without holding lock)
 	tw.wg.Wait()

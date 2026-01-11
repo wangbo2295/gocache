@@ -11,8 +11,8 @@ import (
 // Properties holds all configuration properties for GoCache
 type Properties struct {
 	// Server configuration
-	Bind     string
-	Port     int
+	Bind      string
+	Port      int
 	Databases int
 
 	// Client configuration
@@ -20,10 +20,11 @@ type Properties struct {
 	Timeout    int // 0 means no timeout
 
 	// Persistence configuration
-	AppendOnly      bool
-	AppendFilename  string
-	AppendFsync     string // always, everysec, no
-	DBFilename      string
+	AppendOnly         bool
+	AppendFilename     string
+	AppendFsync        string // always, everysec, no
+	DBFilename         string
+	AOFUseRDBPreamble  bool // Use RDB preamble for AOF rewrite (hybrid persistence)
 
 	// Logging configuration
 	LogLevel string // debug, info, warn, error
@@ -33,8 +34,8 @@ type Properties struct {
 	RequirePass string
 
 	// Memory and eviction configuration
-	MaxMemory        int64  // Maximum memory in bytes (0 means no limit)
-	MaxMemoryPolicy  string // Eviction policy: noeviction, allkeys-lru, allkeys-lfu, etc.
+	MaxMemory       int64  // Maximum memory in bytes (0 means no limit)
+	MaxMemoryPolicy string // Eviction policy: noeviction, allkeys-lru, allkeys-lfu, etc.
 }
 
 // Global configuration instance
@@ -52,8 +53,8 @@ var Config = &Properties{
 	LogLevel:        "info",
 	LogFile:         "",
 	RequirePass:     "",
-	MaxMemory:       0,                  // 0 means no limit
-	MaxMemoryPolicy: "noeviction",       // Default: no eviction
+	MaxMemory:       0,            // 0 means no limit
+	MaxMemoryPolicy: "noeviction", // Default: no eviction
 }
 
 // Load loads configuration from file
@@ -172,14 +173,14 @@ func setConfig(key, value string) error {
 	case "maxmemory-policy":
 		policy := strings.ToLower(value)
 		validPolicies := map[string]bool{
-			"noeviction":       true,
-			"allkeys-lru":      true,
-			"allkeys-lfu":      true,
-			"volatile-lru":     true,
-			"volatile-lfu":     true,
-			"allkeys-random":   true,
-			"volatile-random":  true,
-			"volatile-ttl":     true,
+			"noeviction":      true,
+			"allkeys-lru":     true,
+			"allkeys-lfu":     true,
+			"volatile-lru":    true,
+			"volatile-lfu":    true,
+			"allkeys-random":  true,
+			"volatile-random": true,
+			"volatile-ttl":    true,
 		}
 		if !validPolicies[policy] {
 			return fmt.Errorf("invalid maxmemory-policy: %s", value)

@@ -7,10 +7,14 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/wangbo/gocache/auth"
 	"github.com/wangbo/gocache/config"
 	"github.com/wangbo/gocache/database"
 	"github.com/wangbo/gocache/logger"
+	"github.com/wangbo/gocache/persistence"
 	"github.com/wangbo/gocache/persistence/aof"
+	"github.com/wangbo/gocache/persistence/rdb"
+	"github.com/wangbo/gocache/replication"
 	"github.com/wangbo/gocache/server"
 )
 
@@ -38,6 +42,12 @@ func main() {
 		}
 	}
 
+	// Register RDB saver for SAVE/BGSAVE commands
+	persistence.RegisterSaver(&rdb.RDBSaver{})
+
+	// Register RDB loader for replication
+	replication.RegisterRDBLoader(&rdb.RDBLoaderImpl{})
+
 	logger.Info("Starting GoCache server...")
 	logger.Info("Version: 1.0.0-MVP")
 	logger.Info("Binding to %s:%d", config.Config.Bind, config.Config.Port)
@@ -59,12 +69,28 @@ func main() {
 		defer aofHandler.Close()
 	}
 
-	// Create handler
+	// Create authenticator if password is configured
+	var authenticator *auth.Authenticator
+	if config.Config.RequirePass != "" {
+		authenticator = auth.NewAuthenticator()
+		authenticator.SetPassword(config.Config.RequirePass)
+		logger.Info("Authentication enabled")
+	}
+
+	// Create handler with authenticator
 	var handler *server.Handler
-	if aofHandler != nil {
-		handler = server.MakeHandlerWithAOF(db, aofHandler)
+	if authenticator != nil {
+		if aofHandler != nil {
+			handler = server.MakeHandlerWithAuth(db, aofHandler, authenticator)
+		} else {
+			handler = server.MakeHandlerWithAuth(db, nil, authenticator)
+		}
 	} else {
-		handler = server.MakeHandler(db)
+		if aofHandler != nil {
+			handler = server.MakeHandlerWithAOF(db, aofHandler)
+		} else {
+			handler = server.MakeHandler(db)
+		}
 	}
 
 	// Create and start server
